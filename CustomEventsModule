@@ -1,0 +1,60 @@
+using { /Verse.org/Simulation }
+using { /Fortnite.com/Devices }
+using { /Fortnite.com/Characters }
+using { /Verse.org/Concurrency }
+
+SubscribableEvents := module:
+
+    #can be canceled but can not be grouped into an array of cancelables
+    generic_event<public>(payload:type) := class<unique>(signalable(payload)):
+
+        #array of methods to call on Signal()
+        Callbacks : []type{func(:payload):void} = array{}
+
+        #return an instance of this event with an empty array of callback methods
+        Cancel<public>()<transacts>:generic_event(payload)=
+            NewSelf := generic_event(payload):
+                Callbacks := array{}
+
+        #return an instance of this event with the method passed in added to whatever existed in callbacks prior
+        Subscribe<public>(Func:type{func(:payload):void}):generic_event(payload)=
+            NewCallbacks := Callbacks + array{Func}
+            NewSelf := generic_event(payload):
+                Callbacks := NewCallbacks
+            return NewSelf
+
+        #invoke all callback methods
+        Signal<override>(Payload:payload):void={for(Callback:Callbacks){Callback(Payload)}}
+
+    #way cleaner to use if written "per type" | you can implement this for just about any type you want, you can also remove the awaitable interface if you do not need it to make it smaller
+    agent_event <public>:= class(signalable(agent), awaitable(agent), cancelable):
+
+        #array of methods to call on Signal()
+        var Callbacks : []type{func(:agent):void} = array{}
+
+        #Used for Await() method | Signal() signals AwaitableSetEvent(InAgent) if true
+        var IsAwaiting : logic = false
+
+        #kind of lazy but i can't think of an actual way to implment Await() on my own quite yet lol
+        AwaitableSetEvent : event(agent) = event(agent){}
+
+        #Clear the array of Callback methods to call on Signal()
+        Cancel<override>()<transacts>:void={set Callbacks = array{}}
+
+        #Add Passed In Method to Callbacks | returns the class instance 
+        Subscribe<public>(Func:type{func(:agent):void})<transacts>:cancelable=
+            set Callbacks = Callbacks + array{Func}
+            return Self
+
+        #Signals AwaitableSetEvent if IsAwaiting | calls all methods in Callbacks using the passed in Agent
+        Signal<override>(Agent:agent):void=
+            if(IsAwaiting?){AwaitableSetEvent.Signal(Agent)}
+            for(Callback:Callbacks){Callback(Agent)}
+
+        #Again.. prob not the best way to go about this but wanted to keep the Awaitable functionality to keep it on par 
+        #with epics listenables for use with time flow / concurrency features
+        Await<override>()<suspends>:agent=
+            set IsAwaiting = true
+            Agent := AwaitableSetEvent.Await()
+            set IsAwaiting = false
+            return Agent
