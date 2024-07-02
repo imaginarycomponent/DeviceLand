@@ -58,3 +58,55 @@ SubscribableEvents := module:
             Agent := AwaitableSetEvent.Await()
             set IsAwaiting = false
             return Agent
+
+    -------------------------------------------------------------------------
+    #A way to make each subscription individually cancelable! 
+    #a way to manage canceling individual callbacks
+    cancelable_agent_callback := class(cancelable):
+        var callback : ?type{func(:agent):void} = false
+        Cancel<override>()<transacts>:void={set callback = false}
+        Invoke(Payload:agent):void={if(Callback := callback?){Callback(Payload)}}
+            
+    #a wrapper to pass extra params when subscribing | Passes InputFunc into Subscribe()
+    agent_wrapper<public>(t:type) := class():
+        ExtraData<public> : t
+        OutputFunc<public>  : tuple(agent, t) -> void
+        InputFunc<public> (Agent:agent):void=OutputFunc(Agent, ExtraData)
+
+    # an example of an event for type agent
+    agent_event <public> := class(signalable(agent), awaitable(agent)):
+
+        #array of individually cancelable methods to call on Signal()
+        var Callbacks : []cancelable_agent_callback = array{}
+
+        #Build a new instance of cancelable_agent_callback | add new instance to array of callbacks | return NewCallback for cancelable management
+        Subscribe<public>(Callback:type{__(:agent):void})<transacts>:cancelable=
+            NewCallback := cancelable_agent_callback{callback := option{Callback}}
+            set Callbacks += array{NewCallback}
+            return NewCallback
+
+        #Allows Generically passing extra params 
+        #initializes a parametric agent_wrapper instance 
+        #the agent_wrapper instance creates a method that just takes an agent | that will call the method passed in with the extra param 
+        SubscribeAgent<public>(OutputFunc : tuple(agent, t)->void, ExtraData : t where t:type):cancelable=
+            Wrapper := agent_wrapper(t){ExtraData := ExtraData, OutputFunc := OutputFunc}
+            Subscribe(Wrapper.InputFunc)
+
+        #for managing Await() / to avoid signaling AwaitableEvent when we don't need to
+        var IsAwaiting : logic = false
+
+        #for Await() since my brain isn't quite big enough to deal with how Await could possibly work lol
+        AwaitableEvent : event(agent) = event(agent){}
+            
+        #Signals Paramter for Await() if IsWaiting = true 
+        #Calls Invoke on all Callbacks
+        Signal<override>(InAgent:agent):void=
+            if(IsAwaiting?){AwaitableEvent.Signal(InAgent)}
+            for(Callback:Callbacks){Callback.Invoke(InAgent)}
+
+        #Awaits Signal to be called returning what ever signal passed
+        Await<override>()<suspends>:agent=
+            set IsAwaiting = true
+            Agent := AwaitableEvent.Await()
+            set IsAwaiting = false
+            return Agent
